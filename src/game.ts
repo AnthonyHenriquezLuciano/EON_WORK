@@ -2,11 +2,15 @@
  * First playable day: deterministic, framework-independent actions.
  * This slice starts at age 14; full life-from-birth remains the product goal.
  */
+import { createDefaultCharacter, sanitizeCharacter, startingStats } from './character.ts';
+import type { CharacterProfile } from './character.ts';
+
 export type LocationId = 'home' | 'street' | 'school' | 'cafe' | 'studio';
 export type Stats = { energy: number; mood: number; study: number; creativity: number };
 export type JournalEntry = { id: string; day: number; minute: number; title: string; text: string; source: 'observed' | 'testimony' | 'evidence' };
 export type GameState = {
-  version: 1;
+  version: 2;
+  character: CharacterProfile;
   day: number;
   minute: number;
   location: LocationId;
@@ -31,7 +35,7 @@ export const ACTIONS: Action[] = [
   {id:'mom',label:'Hablar con mamá',location:'home',minutes:15,detail:'Escucha una parte de la historia familiar'},
   {id:'submit',label:'Entregar tarea',location:'school',minutes:20,detail:'Requiere la mochila preparada'},
   {id:'eva_listen',label:'Escuchar a Eva',location:'school',minutes:20,detail:'Descubre lo que le preocupa'},
-  {id:'eva_busy',label:'Decir a Eva que estás ocupada',location:'school',minutes:10,detail:'Una respuesta también es una decisión'},
+  {id:'eva_busy',label:'Decir a Eva que no tienes tiempo',location:'school',minutes:10,detail:'Una respuesta también es una decisión'},
   {id:'study',label:'Participar en clase',location:'school',minutes:45,detail:'Practicar y aprender'},
   {id:'coffee',label:'Tomar algo en la cafetería',location:'cafe',minutes:30,detail:'Relajarte después de clases'},
   {id:'paint',label:'Pintar el mural del barrio',location:'studio',minutes:50,detail:'Practicar arte y colaborar'},
@@ -48,8 +52,9 @@ export const INITIAL_OBJECTIVES = [
 ];
 const clamp = (v:number) => Math.max(0,Math.min(100,v));
 const has=(s:GameState,id:string)=>s.completed.includes(id);
-export function createInitialState(): GameState {
-  return {version:1, day:1, minute:450, location:'home', stats:{energy:83,mood:72,study:20,creativity:24},evaRelationship:0,completed:[],inventory:[],journal:[{id:'intro',day:1,minute:450,title:'Un día en Barrio Aurora',text:'Despiertas con muchas cosas que hacer. Hoy puedes explorar, conocer personas y tomar pequeñas decisiones que dejarán recuerdos.',source:'observed'}],notice:'Tu historia se escribe con acciones, no con saltos de un año.'};
+export const SAVE_KEY='eon-save-v1';
+export function createInitialState(character:CharacterProfile=createDefaultCharacter()): GameState {
+  return {version:2, character, day:1, minute:450, location:'home', stats:startingStats(character),evaRelationship:0,completed:[],inventory:[],journal:[{id:'intro',day:1,minute:450,title:'Un día en Barrio Aurora',text:'Despiertas con muchas cosas que hacer. Hoy puedes explorar, conocer personas y tomar pequeñas decisiones que dejarán recuerdos.',source:'observed'}],notice:'Tu historia se escribe con acciones, no con saltos de un año.'};
 }
 export function clock(minute:number):string {
   const hour = Math.floor(minute/60)%24;
@@ -86,7 +91,7 @@ export function transition(previous:GameState,command:string):GameState {
     case 'mom':remember(s,command,'La oferta de trabajo','Mamá menciona una oferta laboral que tu padre rechazó cuando eras bebé. No conoces sus razones.','testimony');s.notice='Mamá te ha contado algo sobre tu infancia.';break;
     case 'submit':s.stats.study=clamp(s.stats.study+15);s.notice='Entregaste tu tarea. Has aprendido a organizarte.';break;
     case 'eva_listen':s.evaRelationship+=2;s.stats.mood=clamp(s.stats.mood+5);remember(s,'eva','Una conversación con Eva','Eva te cuenta que quiere participar en el mural del barrio. Decidiste escucharla.','observed');s.notice='Eva agradece que la escucharas.';break;
-    case 'eva_busy':s.evaRelationship-=1;remember(s,'eva','Una conversación pendiente','Eva quiso hablar contigo, pero le dijiste que estabas ocupada.','observed');s.notice='Eva parece algo decepcionada. No sabes qué quería contar.';break;
+    case 'eva_busy':s.evaRelationship-=1;remember(s,'eva','Una conversación pendiente','Eva quiso hablar contigo, pero le dijiste que no tenías tiempo.','observed');s.notice='Eva parece algo decepcionada. No sabes qué quería contar.';break;
     case 'study':s.stats.study=clamp(s.stats.study+12);s.notice='Participaste en clase y aprendiste algo nuevo.';break;
     case 'coffee':s.stats.mood=clamp(s.stats.mood+7);s.notice='Disfrutaste un descanso en El Encuentro.';break;
     case 'paint':s.stats.creativity=clamp(s.stats.creativity+14);remember(s,'mural','El mural del barrio','Pasaste la tarde aportando algo de ti al mural comunitario.','observed');s.notice='Tu contribución ya forma parte del mural.';break;
@@ -96,7 +101,37 @@ export function transition(previous:GameState,command:string):GameState {
   }
   return s;
 }
-export function loadGame():GameState {
-  try { const raw=localStorage.getItem('eon-save-v1');if(raw){const data=JSON.parse(raw);if(data?.version===1 && typeof data.minute==='number' && Array.isArray(data.journal)&&Array.isArray(data.completed))return data as GameState;} }catch{}
-  return createInitialState();
+/**
+ * Reads a save. Version 1 saves (before the character creator) keep their
+ * progress and get the original protagonist. Anything unreadable returns null.
+ */
+export function parseSave(raw:string|null):GameState|null {
+  if(!raw)return null;
+  try {
+    const data=JSON.parse(raw);
+    if(!data||(data.version!==1&&data.version!==2))return null;
+    if(typeof data.minute!=='number'||typeof data.day!=='number'||!Array.isArray(data.journal)||!Array.isArray(data.completed))return null;
+    if(!PLACES.some(p=>p.id===data.location))return null;
+    const fresh=createInitialState();
+    const stats=data.stats&&typeof data.stats==='object'?data.stats:{};
+    const num=(v:unknown,f:number)=>typeof v==='number'&&Number.isFinite(v)?clamp(v):f;
+    return {
+      ...data,
+      version:2,
+      character:sanitizeCharacter(data.version===2?data.character:undefined),
+      stats:{energy:num(stats.energy,fresh.stats.energy),mood:num(stats.mood,fresh.stats.mood),study:num(stats.study,fresh.stats.study),creativity:num(stats.creativity,fresh.stats.creativity)},
+      inventory:Array.isArray(data.inventory)?data.inventory.filter((v:unknown)=>typeof v==='string'):[],
+      evaRelationship:typeof data.evaRelationship==='number'?data.evaRelationship:0,
+      notice:typeof data.notice==='string'?data.notice:''
+    };
+  } catch { return null; }
+}
+export function readSave():GameState|null {
+  try { return parseSave(localStorage.getItem(SAVE_KEY)); } catch { return null; }
+}
+export function writeSave(state:GameState):void {
+  try { localStorage.setItem(SAVE_KEY,JSON.stringify(state)); } catch { /* private mode or full storage: keep playing */ }
+}
+export function deleteSave():void {
+  try { localStorage.removeItem(SAVE_KEY); } catch { /* nothing to remove */ }
 }

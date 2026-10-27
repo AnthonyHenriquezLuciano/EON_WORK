@@ -1,10 +1,43 @@
 import { useEffect, useRef } from 'react';
-import { Application, Container, Graphics, Rectangle, Text } from 'pixi.js';
+import { Application, Container, Graphics, Rectangle, Sprite, Text, Texture } from 'pixi.js';
 import type { LocationId } from './game';
+import { createDefaultCharacter } from './character';
+import type { Appearance, Gender } from './character';
+import { paintSprite } from './art/sprite';
+import type { Facing } from './art/sprite';
+import type { PixelBuffer } from './art/pixel';
+
+type Look = { appearance: Appearance; gender: Gender; name?: string };
+const textures = new Map<string, Texture>();
+function textureFor(look: Look, facing: Facing): Texture {
+ const key = JSON.stringify([look.appearance, look.gender]) + facing;
+ let t = textures.get(key);
+ if (!t) {
+  const buf: PixelBuffer = paintSprite(look.appearance, look.gender, facing);
+  const canvas = document.createElement('canvas'); canvas.width = buf.width; canvas.height = buf.height;
+  canvas.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(buf.data), buf.width, buf.height), 0, 0);
+  t = Texture.from(canvas); t.source.scaleMode = 'nearest';
+  textures.set(key, t);
+ }
+ return t;
+}
+const npc = (gender: Gender, patch: Partial<Appearance>): Look => ({ gender, appearance: { ...createDefaultCharacter(gender).appearance, ...patch } });
+const NPCS: Record<string, Look> = {
+ 'Mamá': npc('femenino', { hair: 4, hairColor: 1, skin: 4, top: 2, topColor: 5, bottom: 1, bottomColor: 4, earrings: 2, backpack: false, extras: [] }),
+ 'Papá': npc('masculino', { hair: 10, hairColor: 0, skin: 3, top: 3, topColor: 3, bottom: 1, bottomColor: 1, backpack: false, glasses: 2 }),
+ 'Eva': npc('femenino', { hair: 5, hairColor: 0, skin: 5, top: 1, topColor: 6, bottom: 2, bottomColor: 4 }),
+ 'Profesora': npc('femenino', { hair: 3, hairColor: 2, skin: 2, top: 3, topColor: 7, bottom: 1, bottomColor: 0, glasses: 1, backpack: false }),
+ 'Barista': npc('masculino', { hair: 7, hairColor: 0, skin: 6, top: 2, topColor: 8, bottom: 1, bottomColor: 0, backpack: false }),
+ 'Vecina': npc('femenino', { hair: 11, hairColor: 5, skin: 4, top: 2, topColor: 9, bottom: 3, bottomColor: 3, backpack: false }),
+ 'Sofía': npc('femenino', { hair: 2, hairColor: 4, skin: 1, top: 3, topColor: 9, bottom: 2, bottomColor: 0, extras: ['pecas'] }),
+ 'Profesor': npc('masculino', { hair: 9, hairColor: 0, skin: 5, top: 3, topColor: 4, bottom: 1, bottomColor: 1, glasses: 1, backpack: false }),
+ 'Vecino': npc('masculino', { hair: 8, hairColor: 1, skin: 4, top: 2, topColor: 7, bottom: 3, bottomColor: 1, backpack: false }),
+ 'Músico': npc('masculino', { hair: 2, hairColor: 0, skin: 6, top: 0, topColor: 5, bottom: 0, bottomColor: 3, headphones: true, backpack: false })
+};
 
 type Spot={id:string;label:string;x:number;y:number;hue:number};
 const locations:Record<LocationId,{title:string;subtitle:string;spots:Spot[];theme:number}>={
- home:{title:'Hogar de Alma',subtitle:'Una mañana llena de posibilidades',theme:0x473b62,spots:[
+ home:{title:'Hogar',subtitle:'Una mañana llena de posibilidades',theme:0x473b62,spots:[
   {id:'breakfast',label:'Desayunar',x:360,y:290,hue:0xe6a45b},
   {id:'bag',label:'Mochila',x:608,y:310,hue:0xa88ad5},
   {id:'mom',label:'Hablar con mamá',x:485,y:217,hue:0xe79e9c},
@@ -49,17 +82,7 @@ function boxBuilding(parent:Container,x:number,y:number,w:number,h:number,roof:n
  for(let j=0;j<3;j++){g.rect(x-w/2+10+j*19,y-h+24,10,14).fill(0xf3c878);}
  parent.addChild(g);
 }
-function avatar(x:number,y:number,shirt:number,scale=1){
- const c=new Container();c.position.set(x,y);c.scale.set(scale);const g=new Graphics();
- g.rect(-9,-6,7,9).fill(0x262c4c).rect(2,-6,7,9).fill(0x262c4c);
- g.rect(-13,-28,26,25).fill(shirt).rect(-18,-23,6,18).fill(0xf2bd9c).rect(12,-23,6,18).fill(0xf2bd9c);
- g.rect(-11,-46,22,22).fill(0xf2bd9c);g.rect(-14,-51,28,10).fill(0x3c2631);
- g.rect(-14,-45,6,17).fill(0x3c2631).rect(9,-45,6,17).fill(0x3c2631);
- g.rect(-6,-35,3,3).fill(0x352734).rect(4,-35,3,3).fill(0x352734);
- g.rect(-8,1,9,4).fill(0x141d2c).rect(3,1,9,4).fill(0x141d2c);
- c.addChild(g);return c;
-}
-function drawScene(app:Application,location:LocationId, onAction:(id:string)=>void){
+function drawScene(app:Application,location:LocationId, onAction:(id:string)=>void, look:Look){
  const stage=app.stage;
  stage.removeChildren().forEach(child=>child.destroy({children:true}));
  const scene=locations[location];
@@ -108,7 +131,7 @@ function drawScene(app:Application,location:LocationId, onAction:(id:string)=>vo
  decorations.rect(x-3,y-5,7,24).fill(0x655043).circle(x,y-17,19).fill(i%3===0?0xb279a8:0x5c9b7a);}
  stage.addChild(decorations);
  const npcNames=location==='home'?['Mamá','Papá']:location==='school'?['Eva','Profesora']:location==='cafe'?['Barista','Vecina']:location==='studio'?['Sofía','Profesor']:['Vecino','Músico'];
- for(let i=0;i<2;i++){const npc=avatar(355+i*210,390-i*54,i?0x93a6c9:0xc77e91,.85);stage.addChild(npc);label(stage,npcNames[i],355+i*210,410-i*54,11);}
+ for(let i=0;i<2;i++){const person=new Sprite(textureFor(NPCS[npcNames[i]],i?'left':'right'));person.anchor.set(.5,1);person.scale.set(1.5);person.position.set(355+i*210,396-i*54);stage.addChild(person);label(stage,npcNames[i],355+i*210,410-i*54,11);}
  for(const spot of scene.spots){
    const marker=new Container();marker.position.set(spot.x,spot.y);marker.eventMode='static';marker.cursor='pointer';
    const plate=new Graphics().roundRect(-87,-19,174,37,8).fill(0x101d30).roundRect(-85,-17,170,33,7).stroke({color:spot.hue,width:2});
@@ -117,8 +140,10 @@ function drawScene(app:Application,location:LocationId, onAction:(id:string)=>vo
    marker.on('pointertap',(event)=>{event.stopPropagation();onAction(spot.id);});
    stage.addChild(marker);
  }
- const player=avatar(485,477,0xf4be8b,1.15);stage.addChild(player);
- label(stage,scene.title,480,27,24,0xf8d17c);
+ const player=new Sprite(textureFor(look,'front'));player.anchor.set(.5,1);player.scale.set(1.75);player.position.set(485,477);stage.addChild(player);
+ let facing:Facing='front';
+ const face=(f:Facing)=>{if(f!==facing){facing=f;player.texture=textureFor(look,f);}};
+ label(stage,location==='home'?'Hogar de '+look.name:scene.title,480,27,24,0xf8d17c);
  label(stage,scene.subtitle,480,55,12,0xd1d8e8);
  const destination={x:485,y:477};
  stage.hitArea=new Rectangle(0,0,960,560);stage.eventMode='static';
@@ -134,14 +159,15 @@ function drawScene(app:Application,location:LocationId, onAction:(id:string)=>vo
   if(keys.has('ArrowRight')||keys.has('d'))x++;
   if(keys.has('ArrowUp')||keys.has('w'))y--;
   if(keys.has('ArrowDown')||keys.has('s'))y++;
-  if(x||y){player.x+=x*speed;player.y+=y*speed;destination.x=player.x;destination.y=player.y;}
-  else{const dx=destination.x-player.x,dy=destination.y-player.y;const len=Math.hypot(dx,dy);if(len>2){player.x+=dx/len*Math.min(len,speed);player.y+=dy/len*Math.min(len,speed);}}
+  if(x||y){player.x+=x*speed;player.y+=y*speed;destination.x=player.x;destination.y=player.y;face(x?(x>0?'right':'left'):(y<0?'back':'front'));}
+  else{const dx=destination.x-player.x,dy=destination.y-player.y;const len=Math.hypot(dx,dy);if(len>2){player.x+=dx/len*Math.min(len,speed);player.y+=dy/len*Math.min(len,speed);face(Math.abs(dx)>Math.abs(dy)?(dx>0?'right':'left'):(dy<0?'back':'front'));}}
   player.x=Math.max(85,Math.min(865,player.x));player.y=Math.max(170,Math.min(525,player.y));
  };
  app.ticker.add(tick);
  return ()=>{window.removeEventListener('keydown',down);window.removeEventListener('keyup',up);app.ticker.remove(tick);stage.removeAllListeners();};
 }
-export function Scene({location,onAction}:{location:LocationId;onAction:(id:string)=>void}){
+export function Scene({location,onAction,appearance,gender,name}:{location:LocationId;onAction:(id:string)=>void;appearance:Appearance;gender:Gender;name:string}){
+ const look=useRef<Look>({appearance,gender,name});look.current={appearance,gender,name};
  const host=useRef<HTMLDivElement>(null);
  const appRef=useRef<Application|null>(null);
  const stopRef=useRef<(()=>void)|null>(null);
@@ -152,11 +178,11 @@ export function Scene({location,onAction}:{location:LocationId;onAction:(id:stri
   void app.init({width:960,height:560,backgroundColor:0x101e30,antialias:false,resolution:1}).then(()=>{
    if(cancelled){app.destroy();return;}
    appRef.current=app;host.current?.appendChild(app.canvas);
-   stopRef.current=drawScene(app,location,(id)=>callback.current(id));
+   stopRef.current=drawScene(app,location,(id)=>callback.current(id),look.current);
   });
   return ()=>{cancelled=true;stopRef.current?.();stopRef.current=null;appRef.current=null;try{app.destroy();}catch{}};
   // Pixi application initializes once; subsequent location changes redraw it.
  },[]);
- useEffect(()=>{if(appRef.current){stopRef.current?.();stopRef.current=drawScene(appRef.current,location,(id)=>callback.current(id));}},[location]);
+ useEffect(()=>{if(appRef.current){stopRef.current?.();stopRef.current=drawScene(appRef.current,location,(id)=>callback.current(id),look.current);}},[location]);
  return <div ref={host} className="pixel-scene" role="img" aria-label={'Escenario interactivo: '+locations[location].title}/>;
 }
