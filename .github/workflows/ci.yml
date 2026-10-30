@@ -1,16 +1,86 @@
-name: EON playable checks
+name: EON WORLD - build y pruebas
+
 on:
   push:
     branches: [main, feat/aurora-first-playable]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      export_dependencies:
+        description: 'Exportar node_modules Linux x64 para desarrollo sin npm'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eon-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  build:
+    name: Compilar y verificar EON WORLD
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Obtener codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --no-audit --no-fund
-      - run: npm test
-      - run: npm run build
+          package-manager-cache: false
+
+      - name: Instalar dependencias reproduciblemente si existe lockfile
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Comprobar motores graficos
+        run: npm ls pixi.js phaser --depth=0
+
+      - name: Ejecutar pruebas
+        run: npm test
+
+      - name: Compilar version web
+        run: npm run build
+
+      - name: Comprobar salida compilada
+        shell: bash
+        run: test -s dist/index.html
+
+      - name: Descargar juego compilado
+        uses: actions/upload-artifact@v4
+        with:
+          name: eon-world-web-${{ github.run_number }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Conservar lockfile para versionar dependencias
+        uses: actions/upload-artifact@v4
+        with:
+          name: eon-world-lock-${{ github.run_number }}
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preparar paquete de dependencias Linux (opcional)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.export_dependencies }}
+        run: tar -czf eon-world-deps-linux-x64.tar.gz node_modules package.json package-lock.json
+
+      - name: Descargar dependencias Linux (opcional)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.export_dependencies }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eon-world-deps-linux-x64-${{ github.run_number }}
+          path: eon-world-deps-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
